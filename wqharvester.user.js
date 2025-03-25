@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         文泉阅读器切片图片合并保存(完善版)
+// @name         文泉阅读器切片图片合并保存(优化跳转版)
 // @namespace    http://tampermonkey.net/
-// @version      0.6
-// @description  自动合并文泉阅读器中的切片大图并保存为完整页面，支持页面选择和自动跳转
+// @version      0.7
+// @description  自动合并文泉阅读器中的切片大图并保存为完整页面，支持页面选择和增强跳转功能
 // @author       You
 // @match        https://wqbook.wqxuetang.com/deep/read/*
 // @match        *://wqbook.wqxuetang.com/deep/read/*
@@ -51,17 +51,75 @@
         }
     }
 
-    // 跳转到指定页面
-    function jumpToPage(pageIndex) {
+    // 获取当前可见的页面索引
+    function getCurrentVisiblePage() {
+        // 获取所有页面元素
+        const pageElements = document.querySelectorAll(".page-img-box");
+        if (!pageElements || pageElements.length === 0) return null;
+
+        // 获取窗口高度和滚动位置
+        const windowHeight = window.innerHeight;
+        const scrollTop = window.scrollY || document.documentElement.scrollTop;
+        const scrollBottom = scrollTop + windowHeight;
+
+        // 查找当前在视口中的页面
+        let bestVisiblePage = null;
+        let bestVisibility = 0;
+
+        pageElements.forEach((page) => {
+            const rect = page.getBoundingClientRect();
+            const pageTop = rect.top + scrollTop;
+            const pageBottom = rect.bottom + scrollTop;
+
+            // 计算页面在视口中可见的部分
+            const visibleTop = Math.max(pageTop, scrollTop);
+            const visibleBottom = Math.min(pageBottom, scrollBottom);
+            const visibleHeight = Math.max(0, visibleBottom - visibleTop);
+
+            // 如果这个页面比之前找到的更可见，则更新
+            if (visibleHeight > bestVisibility) {
+                bestVisibility = visibleHeight;
+                bestVisiblePage = parseInt(page.getAttribute("index"));
+            }
+        });
+
+        return bestVisiblePage;
+    }
+
+    // 跳转到指定页面，带验证和重试
+    function jumpToPage(pageIndex, isRetry = false) {
         const pageBox = document.querySelector(
             `.page-img-box[index="${pageIndex}"]`
         );
         if (pageBox) {
             pageBox.scrollIntoView({ behavior: "smooth", block: "start" });
-            console.log(`已跳转到第${pageIndex}页`);
-            updateStatusPanel(`已跳转到第${pageIndex}页`);
+            console.log(`正在跳转到第${pageIndex}页${isRetry ? "(重试)" : ""}`);
+            updateStatusPanel(
+                `正在跳转到第${pageIndex}页${isRetry ? "(重试)" : ""}...`
+            );
+
+            // 1秒后验证跳转是否成功
+            setTimeout(() => {
+                const currentPage = getCurrentVisiblePage();
+                console.log(
+                    `跳转后检测: 目标=${pageIndex}, 当前=${currentPage}`
+                );
+
+                // 如果当前页与目标页相差超过2页且未重试过，则再次尝试跳转
+                if (
+                    currentPage !== null &&
+                    Math.abs(currentPage - pageIndex) > 2 &&
+                    !isRetry
+                ) {
+                    console.log(`跳转偏差过大，再次尝试跳转到第${pageIndex}页`);
+                    jumpToPage(pageIndex, true); // 重试一次
+                } else {
+                    updateStatusPanel(`已跳转到第${pageIndex}页附近`);
+                }
+            }, 1000);
         } else {
             console.log(`找不到第${pageIndex}页元素`);
+            updateStatusPanel(`找不到第${pageIndex}页元素`);
         }
     }
 
@@ -441,11 +499,18 @@
             currentMinPage = startPage;
             jumpToPage(currentMinPage);
         } else {
-            // 从显示的第一页开始
-            const firstVisiblePage = document.querySelector(".page-img-box");
-            if (firstVisiblePage) {
-                startPage = parseInt(firstVisiblePage.getAttribute("index"));
+            // 从当前可见的页面开始
+            const currentPage = getCurrentVisiblePage();
+            if (currentPage !== null) {
+                startPage = currentPage;
                 currentMinPage = startPage;
+            } else {
+                // 如果无法确定当前页，使用第一个页面
+                const firstPage = document.querySelector(".page-img-box");
+                if (firstPage) {
+                    startPage = parseInt(firstPage.getAttribute("index"));
+                    currentMinPage = startPage;
+                }
             }
         }
 
