@@ -1,12 +1,12 @@
 // ==UserScript==
-// @name         文泉阅读器切片图片合并保存(优化跳转版)
+// @name         文泉阅读器切片图片合并保存(高级交互版)
 // @namespace    http://tampermonkey.net/
-// @version      0.7
-// @description  自动合并文泉阅读器中的切片大图并保存为完整页面，支持页面选择和增强跳转功能
+// @version      1.0
+// @description  自动合并文泉阅读器中的切片大图并保存为完整页面，支持页面选择和高级交互界面
 // @author       You
 // @match        https://wqbook.wqxuetang.com/deep/read/*
 // @match        *://wqbook.wqxuetang.com/deep/read/*
-// @grant        GM_notification
+// @grant        none
 // ==/UserScript==
 
 (function () {
@@ -26,11 +26,17 @@
     // 已完成的页面集合
     const completedPages = new Set();
 
+    // 待合并的页面集合 (切片已加载完成但尚未合并)
+    const pendingPages = new Set();
+
     // 处理中的页面集合
     const processingPages = new Set();
 
-    // 初始化状态面板
-    let statusPanel;
+    // 当前活动页面 (用于控制只合并当前页)
+    let activePage = null;
+
+    // 是否正在运行
+    let isRunning = false;
 
     // 脚本是否已初始化
     let isInitialized = false;
@@ -38,17 +44,118 @@
     // 是否有面板已创建
     let panelCreated = false;
 
+    // 观察器引用
+    let observer = null;
+
+    // 面板引用
+    let mainPanel;
+    let statusDisplay;
+    let progressDisplay;
+    let currentPageInfo;
+    let completionNotice;
+
+    // 消息定时器
+    let noticeTimer = null;
+
     // 提取书籍ID
     function getBookId() {
         const urlParams = new URLSearchParams(window.location.search);
         return urlParams.get("bid") || "unknown";
     }
 
-    // 更新状态面板信息
-    function updateStatusPanel(message) {
-        if (statusPanel) {
-            statusPanel.innerHTML = message;
+    // 显示临时通知消息
+    function showNotice(message, duration = 3000) {
+        if (!completionNotice) return;
+
+        // 清除之前的定时器
+        if (noticeTimer) {
+            clearTimeout(noticeTimer);
         }
+
+        // 显示新消息
+        completionNotice.textContent = message;
+        completionNotice.style.opacity = "1";
+
+        // 设置消失定时器
+        noticeTimer = setTimeout(() => {
+            completionNotice.style.opacity = "0";
+        }, duration);
+    }
+
+    // 更新状态面板信息
+    function updateStatusDisplay(message) {
+        if (statusDisplay) {
+            statusDisplay.textContent = message;
+        }
+    }
+
+    // 更新当前页面信息
+    function updateCurrentPageInfo(message) {
+        if (currentPageInfo) {
+            currentPageInfo.innerHTML = message;
+        }
+    }
+
+    // 更新进度条显示
+    function updateProgressBar(pageIndex, slices) {
+        if (!progressDisplay) return;
+
+        // 清空当前进度条
+        progressDisplay.innerHTML = "";
+
+        // 如果没有切片，显示空进度条
+        if (!slices || slices.size === 0) {
+            progressDisplay.innerHTML = `
+                <div class="progress-container">
+                    <div class="progress-item"></div>
+                    <div class="progress-item"></div>
+                    <div class="progress-item"></div>
+                    <div class="progress-item"></div>
+                    <div class="progress-item"></div>
+                    <div class="progress-item"></div>
+                </div>
+            `;
+            return;
+        }
+
+        // 按left值排序切片
+        const sortedSlices = Array.from(slices.keys())
+            .map((key) => parseFloat(key))
+            .sort((a, b) => a - b);
+
+        // 确定6个位置区间
+        const minLeft = sortedSlices[0];
+        const maxLeft = sortedSlices[sortedSlices.length - 1];
+        const range = maxLeft - minLeft;
+        const interval = range / 5; // 分成6段
+
+        // 创建进度条容器
+        const container = document.createElement("div");
+        container.className = "progress-container";
+
+        // 为每个位置创建进度块
+        for (let i = 0; i < 6; i++) {
+            const lowerBound =
+                i === 0 ? minLeft - 0.1 : minLeft + interval * (i - 0.01);
+            const upperBound =
+                i === 5 ? maxLeft + 0.1 : minLeft + interval * (i + 1.01);
+
+            const progressItem = document.createElement("div");
+            progressItem.className = "progress-item";
+
+            // 检查此区间是否有切片
+            const hasSlice = sortedSlices.some(
+                (left) => left >= lowerBound && left <= upperBound
+            );
+
+            if (hasSlice) {
+                progressItem.classList.add("loaded");
+            }
+
+            container.appendChild(progressItem);
+        }
+
+        progressDisplay.appendChild(container);
     }
 
     // 获取当前可见的页面索引
@@ -91,42 +198,61 @@
         const pageBox = document.querySelector(
             `.page-img-box[index="${pageIndex}"]`
         );
-        if (pageBox) {
-            pageBox.scrollIntoView({ behavior: "smooth", block: "start" });
-            console.log(`正在跳转到第${pageIndex}页${isRetry ? "(重试)" : ""}`);
-            updateStatusPanel(
-                `正在跳转到第${pageIndex}页${isRetry ? "(重试)" : ""}...`
-            );
-
-            // 1秒后验证跳转是否成功
-            setTimeout(() => {
-                const currentPage = getCurrentVisiblePage();
-                console.log(
-                    `跳转后检测: 目标=${pageIndex}, 当前=${currentPage}`
-                );
-
-                // 如果当前页与目标页相差超过2页且未重试过，则再次尝试跳转
-                if (
-                    currentPage !== null &&
-                    Math.abs(currentPage - pageIndex) > 2 &&
-                    !isRetry
-                ) {
-                    console.log(`跳转偏差过大，再次尝试跳转到第${pageIndex}页`);
-                    jumpToPage(pageIndex, true); // 重试一次
-                } else {
-                    updateStatusPanel(`已跳转到第${pageIndex}页附近`);
-                }
-            }, 1000);
-        } else {
+        if (!pageBox) {
             console.log(`找不到第${pageIndex}页元素`);
-            updateStatusPanel(`找不到第${pageIndex}页元素`);
+            updateStatusDisplay(`找不到第${pageIndex}页元素`);
+            return;
         }
+
+        pageBox.scrollIntoView({ behavior: "smooth", block: "start" });
+        console.log(`正在跳转到第${pageIndex}页${isRetry ? "(重试)" : ""}`);
+        updateStatusDisplay(`正在跳转到第${pageIndex}页...`);
+
+        // 1秒后验证跳转是否成功
+        setTimeout(() => {
+            const currentPage = getCurrentVisiblePage();
+            console.log(`跳转后检测: 目标=${pageIndex}, 当前=${currentPage}`);
+
+            // 如果当前页与目标页相差超过2页且未重试过，则再次尝试跳转
+            if (
+                currentPage !== null &&
+                Math.abs(currentPage - pageIndex) > 2 &&
+                !isRetry
+            ) {
+                console.log(`跳转偏差过大，再次尝试跳转到第${pageIndex}页`);
+                jumpToPage(pageIndex, true); // 重试一次
+            } else {
+                updateStatusDisplay(`已定位到第${pageIndex}页附近`);
+
+                // 更新活动页面
+                activePage = pageIndex;
+
+                // 如果该页面在待合并集合中，立即合并它
+                if (pendingPages.has(pageIndex.toString()) && isRunning) {
+                    const bookId = getBookId();
+                    mergeAndSavePage(bookId, pageIndex.toString());
+                }
+
+                // 更新页面信息和进度条
+                if (pageSlices[pageIndex]) {
+                    updateProgressBar(pageIndex, pageSlices[pageIndex]);
+                    updateCurrentPageInfo(
+                        `当前页面: <b>第${pageIndex}页</b> (已加载 ${pageSlices[pageIndex].size} 个切片)`
+                    );
+                } else {
+                    updateProgressBar(pageIndex, null);
+                    updateCurrentPageInfo(
+                        `当前页面: <b>第${pageIndex}页</b> (尚未加载切片)`
+                    );
+                }
+            }
+        }, 1000);
     }
 
     // 处理并记录切片图片
     function processSliceImage(imgElement, bookId, pageIndex, leftValue) {
-        // 如果页面小于起始页，直接跳过
-        if (parseInt(pageIndex) < startPage) {
+        // 如果已停止或页面小于起始页，直接跳过
+        if (!isRunning || parseInt(pageIndex) < startPage) {
             return;
         }
 
@@ -144,22 +270,13 @@
         // 记录该切片
         pageSlices[pageIndex].set(leftValue, imgElement);
 
-        // 计算处理进度
-        const pageProgress = `<br>- 第${pageIndex}页：${pageSlices[pageIndex].size}个切片`;
-        const completedInfo =
-            completedPages.size > 0
-                ? `<br><br>已完成页面：${Array.from(completedPages)
-                      .sort((a, b) => a - b)
-                      .join(", ")}`
-                : "";
-
-        updateStatusPanel(`<div style="font-size:12px;">
-            <b>处理进度：</b>
-            ${pageProgress}
-            ${completedInfo}
-            <br><br>
-            <b>当前处理最小页面：</b> 第${currentMinPage}页
-        </div>`);
+        // 更新当前活动页面的进度条
+        if (activePage == pageIndex) {
+            updateProgressBar(pageIndex, pageSlices[pageIndex]);
+            updateCurrentPageInfo(
+                `当前页面: <b>第${pageIndex}页</b> (已加载 ${pageSlices[pageIndex].size} 个切片)`
+            );
+        }
 
         // 更新当前最小页面并跳转
         if (
@@ -171,11 +288,11 @@
         }
 
         // 检查是否所有切片都已加载
-        checkAndMergePage(bookId, pageIndex);
+        checkPageCompletion(bookId, pageIndex);
     }
 
-    // 检查页面切片是否完整并合并
-    function checkAndMergePage(bookId, pageIndex) {
+    // 检查页面切片是否完整
+    function checkPageCompletion(bookId, pageIndex) {
         const pageBox = document.querySelector(
             `.page-img-box[index="${pageIndex}"]`
         );
@@ -190,17 +307,23 @@
             ? pageSlices[pageIndex].size
             : 0;
 
-        console.log(`页${pageIndex} 切片状态: ${currentSlices}/${totalSlices}`);
-
-        // 如果所有切片都已加载，合并为一张完整图片
+        // 如果所有切片都已加载，标记为待合并
         if (
             totalSlices > 0 &&
             currentSlices >= totalSlices &&
-            !completedPages.has(pageIndex)
+            !completedPages.has(pageIndex) &&
+            !pendingPages.has(pageIndex)
         ) {
-            updateStatusPanel(`所有切片已加载，开始合并第${pageIndex}页...`);
-            console.log(`所有切片已加载，开始合并页${pageIndex}的切片...`);
-            mergeAndSavePage(bookId, pageIndex);
+            console.log(`页${pageIndex}的所有切片已加载，标记为待合并`);
+            pendingPages.add(pageIndex);
+
+            // 如果是当前活动页面，立即合并
+            if (activePage == pageIndex && isRunning) {
+                console.log(
+                    `当前活动页面${pageIndex}的所有切片已加载，开始合并...`
+                );
+                mergeAndSavePage(bookId, pageIndex);
+            }
         }
     }
 
@@ -209,11 +332,16 @@
         if (
             !pageSlices[pageIndex] ||
             pageSlices[pageIndex].size === 0 ||
-            completedPages.has(pageIndex)
+            completedPages.has(pageIndex) ||
+            !isRunning
         ) {
-            console.log(`页${pageIndex}没有可合并的切片或已经处理过`);
             return;
         }
+
+        // 从待合并集合中移除
+        pendingPages.delete(pageIndex);
+
+        updateStatusDisplay(`正在合并第${pageIndex}页...`);
 
         try {
             // 将切片按从左到右排序
@@ -265,16 +393,9 @@
                         completedPages.add(pageIndex);
                         processingPages.delete(pageIndex);
 
-                        // 通知
-                        GM_notification({
-                            title: "页面合并完成",
-                            text: `第${pageIndex}页已合并保存为 ${filename}`,
-                            timeout: 3000,
-                        });
-
-                        updateStatusPanel(
-                            `第${pageIndex}页处理完成！已保存为 ${filename}`
-                        );
+                        // 显示完成通知
+                        showNotice(`✓ 第${pageIndex}页已保存为 ${filename}`);
+                        updateStatusDisplay(`合并完成，继续处理...`);
 
                         // 在本页处理完成后，立即查找并跳转到下一页
                         console.log("准备查找下一个页面...");
@@ -286,13 +407,15 @@
             );
         } catch (error) {
             console.error(`合并页${pageIndex}失败:`, error);
+            updateStatusDisplay(`合并第${pageIndex}页时出错: ${error.message}`);
         }
     }
 
     // 找到下一个未完成的最小页面并跳转
     function findAndJumpToNextPage() {
+        if (!isRunning) return;
+
         console.log("查找下一个未完成页面...");
-        console.log("已完成页面:", Array.from(completedPages));
 
         // 获取所有页码并排序
         const allPages = document.querySelectorAll(".page-img-box");
@@ -306,7 +429,6 @@
         });
 
         allPageIndices.sort((a, b) => a - b);
-        console.log("所有页面:", allPageIndices);
 
         // 找到下一个未完成的最小页面
         let nextPage = null;
@@ -321,31 +443,34 @@
             }
         }
 
-        console.log("找到的下一页:", nextPage);
-
         if (nextPage !== null) {
             currentMinPage = nextPage;
             console.log(`跳转到下一页: ${nextPage}`);
             jumpToPage(nextPage);
-            updateStatusPanel(`跳转到下一个待处理页面: 第${nextPage}页`);
         } else {
-            updateStatusPanel(`<div style="font-size:12px;">
-                <b>处理完成！</b><br><br>
-                已完成页面：${Array.from(completedPages)
-                    .sort((a, b) => a - b)
-                    .join(", ")}
-            </div>`);
+            updateStatusDisplay(`所有页面处理完成！`);
+            showNotice(`✓ 所有页面处理完成！`, 0); // 不自动消失
 
-            GM_notification({
-                title: "处理完成",
-                text: "所有页面都已合并保存！",
-                timeout: 5000,
-            });
+            // 禁用取消按钮，启用开始按钮
+            const cancelButton = document.getElementById("cancelButton");
+            const startButton = document.getElementById("startButton");
+
+            if (cancelButton) cancelButton.style.display = "none";
+            if (startButton) {
+                startButton.disabled = false;
+                startButton.textContent = "重新开始";
+                startButton.style.backgroundColor = "#4CAF50";
+                startButton.style.display = "block";
+            }
+
+            isRunning = false;
         }
     }
 
     // 处理页面中现有的图片
     function processExistingImages() {
+        if (!isRunning) return;
+
         const bookId = getBookId();
         console.log(`检测到书籍ID: ${bookId}`);
 
@@ -367,6 +492,7 @@
                 } else {
                     // 图片尚未加载完成，添加加载事件
                     img.addEventListener("load", function () {
+                        if (!isRunning) return;
                         const leftValue = parseFloat(img.style.left) || 0;
                         processSliceImage(img, bookId, pageIndex, leftValue);
                     });
@@ -377,10 +503,17 @@
 
     // 设置DOM观察器监视新添加的图片
     function setupObserver() {
+        // 如果已有观察器，先断开
+        if (observer) {
+            observer.disconnect();
+        }
+
         const bookId = getBookId();
 
         // 创建MutationObserver观察DOM变化
-        const observer = new MutationObserver((mutations) => {
+        observer = new MutationObserver((mutations) => {
+            if (!isRunning) return;
+
             mutations.forEach((mutation) => {
                 // 检查是否有新添加的节点
                 if (mutation.addedNodes.length) {
@@ -407,6 +540,7 @@
                                     );
                                 } else {
                                     node.addEventListener("load", function () {
+                                        if (!isRunning) return;
                                         const leftValue =
                                             parseFloat(node.style.left) || 0;
                                         processSliceImage(
@@ -436,10 +570,160 @@
         observer.observe(document.body, config);
     }
 
-    // 添加状态面板
-    function addStatusPanel() {
+    // 停止所有处理
+    function stopProcessing() {
+        isRunning = false;
+
+        // 断开观察器
+        if (observer) {
+            observer.disconnect();
+            observer = null;
+        }
+
+        updateStatusDisplay("已停止处理");
+        showNotice("已取消处理", 3000);
+
+        // 恢复开始按钮
+        const startButton = document.getElementById("startButton");
+        const cancelButton = document.getElementById("cancelButton");
+
+        if (startButton) {
+            startButton.disabled = false;
+            startButton.textContent = "重新开始";
+            startButton.style.backgroundColor = "#4CAF50";
+            startButton.style.display = "block";
+        }
+
+        if (cancelButton) {
+            cancelButton.style.display = "none";
+        }
+    }
+
+    // 添加增强的交互界面
+    function addEnhancedUI() {
         // 确保只创建一个面板
         if (panelCreated) return;
+
+        // 添加样式
+        const style = document.createElement("style");
+        style.textContent = `
+            #wqSlicerPanel {
+                position: fixed;
+                top: 10px;
+                right: 10px;
+                background-color: rgba(255,255,255,0.97);
+                color: #333;
+                padding: 12px;
+                border-radius: 8px;
+                z-index: 9999;
+                width: 280px;
+                font-family: 'Arial', sans-serif;
+                box-shadow: 0 0 15px rgba(0,0,0,0.3);
+                transition: all 0.3s ease;
+            }
+            
+            #wqSlicerPanel .panel-header {
+                font-weight: bold;
+                margin-bottom: 12px;
+                font-size: 15px;
+                border-bottom: 1px solid #ddd;
+                padding-bottom: 8px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+            
+            #wqSlicerPanel .panel-section {
+                margin-bottom: 12px;
+                padding-bottom: 8px;
+                border-bottom: 1px solid #eee;
+            }
+            
+            #wqSlicerPanel .buttons-container {
+                display: flex;
+                justify-content: space-between;
+                margin-bottom: 10px;
+            }
+            
+            #wqSlicerPanel button {
+                padding: 6px 12px;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-weight: bold;
+                transition: all 0.2s;
+            }
+            
+            #wqSlicerPanel button:hover {
+                opacity: 0.9;
+            }
+            
+            #wqSlicerPanel button:active {
+                transform: scale(0.98);
+            }
+            
+            #startButton {
+                background: #4CAF50;
+                color: white;
+                flex-grow: 1;
+            }
+            
+            #cancelButton {
+                background: #f44336;
+                color: white;
+                flex-grow: 1;
+                display: none;
+            }
+            
+            #currentPageInfo {
+                font-size: 13px;
+                margin-bottom: 10px;
+                color: #333;
+            }
+            
+            #progressDisplay {
+                margin: 10px 0;
+            }
+            
+            .progress-container {
+                display: flex;
+                justify-content: space-between;
+                height: 12px;
+                margin: 5px 0;
+                background: #f0f0f0;
+                border-radius: 6px;
+                overflow: hidden;
+            }
+            
+            .progress-item {
+                flex-grow: 1;
+                height: 100%;
+                background: #f0f0f0;
+                margin: 0 1px;
+                transition: all 0.3s ease;
+            }
+            
+            .progress-item.loaded {
+                background: #4CAF50;
+            }
+            
+            #statusDisplay {
+                font-size: 13px;
+                color: #555;
+                min-height: 20px;
+            }
+            
+            #completionNotice {
+                font-size: 13px;
+                color: #4CAF50;
+                min-height: 20px;
+                margin-top: 8px;
+                font-weight: bold;
+                opacity: 0;
+                transition: opacity 0.5s ease;
+            }
+        `;
+        document.head.appendChild(style);
 
         // 移除可能存在的旧面板
         const oldPanel = document.getElementById("wqSlicerPanel");
@@ -447,79 +731,121 @@
             oldPanel.remove();
         }
 
+        // 创建面板
         const panel = document.createElement("div");
         panel.id = "wqSlicerPanel";
-        panel.style.position = "fixed";
-        panel.style.top = "10px";
-        panel.style.right = "10px";
-        panel.style.backgroundColor = "rgba(255,255,255,0.95)";
-        panel.style.color = "#333";
-        panel.style.padding = "10px";
-        panel.style.borderRadius = "5px";
-        panel.style.zIndex = "9999";
-        panel.style.width = "220px";
-        panel.style.fontFamily = "Arial, sans-serif";
-        panel.style.boxShadow = "0 0 10px rgba(0,0,0,0.3)";
         panel.innerHTML = `
-            <div style="font-weight:bold;margin-bottom:10px;font-size:14px;border-bottom:1px solid #ccc;padding-bottom:5px;">文泉切片合并工具</div>
-            <button id="startButton" style="margin:5px 0;padding:5px 10px;background:#4CAF50;color:white;border:none;border-radius:3px;cursor:pointer;width:100%;">开始处理</button>
-            <div id="statusDisplay" style="font-size:12px;min-height:40px;margin-top:10px;">
-                点击"开始处理"按钮来启动工具
+            <div class="panel-header">
+                <span>文泉切片合并工具</span>
+            </div>
+            
+            <div class="panel-section">
+                <div class="buttons-container">
+                    <button id="startButton">开始处理</button>
+                    <button id="cancelButton">取消处理</button>
+                </div>
+            </div>
+            
+            <div class="panel-section">
+                <div id="currentPageInfo">当前页面: 等待开始...</div>
+                <div id="progressDisplay"></div>
+            </div>
+            
+            <div class="panel-section">
+                <div id="statusDisplay">点击"开始处理"按钮来启动工具</div>
+                <div id="completionNotice"></div>
             </div>
         `;
 
         document.body.appendChild(panel);
         panelCreated = true;
 
-        // 保存状态显示区域的引用
-        statusPanel = document.getElementById("statusDisplay");
+        // 保存面板元素引用
+        mainPanel = panel;
+        statusDisplay = document.getElementById("statusDisplay");
+        progressDisplay = document.getElementById("progressDisplay");
+        currentPageInfo = document.getElementById("currentPageInfo");
+        completionNotice = document.getElementById("completionNotice");
 
-        // 添加开始按钮事件
+        // 添加按钮事件
         document
             .getElementById("startButton")
             .addEventListener("click", function () {
-                if (!isInitialized) {
+                if (!isInitialized || !isRunning) {
                     this.disabled = true;
                     this.textContent = "处理中...";
                     this.style.backgroundColor = "#888";
-                    initScript();
+                    this.style.display = "none";
+
+                    // 显示取消按钮
+                    const cancelButton =
+                        document.getElementById("cancelButton");
+                    if (cancelButton) {
+                        cancelButton.style.display = "block";
+                    }
+
+                    // 重置状态
+                    if (isInitialized) {
+                        // 如果是重新开始，重置一些状态但保留已完成页面的记录
+                        isRunning = true;
+                        initScript(false);
+                    } else {
+                        // 首次初始化
+                        isRunning = true;
+                        initScript(true);
+                    }
                 }
             });
+
+        document
+            .getElementById("cancelButton")
+            .addEventListener("click", function () {
+                stopProcessing();
+            });
+
+        // 初始化空进度条
+        updateProgressBar(null, null);
     }
 
     // 初始化脚本，询问起始页面
-    function initScript() {
-        if (isInitialized) return;
+    function initScript(isFirstTime = true) {
+        if (isFirstTime) {
+            // 重置状态
+            currentMinPage = Infinity;
+            pendingPages.clear();
+            processingPages.clear();
+            activePage = null;
 
-        const userStartPage = prompt(
-            "请输入要开始处理的页码 (按取消则从当前页开始)："
-        );
-        if (userStartPage && !isNaN(parseInt(userStartPage))) {
-            startPage = parseInt(userStartPage);
-            currentMinPage = startPage;
-            jumpToPage(currentMinPage);
-        } else {
-            // 从当前可见的页面开始
-            const currentPage = getCurrentVisiblePage();
-            if (currentPage !== null) {
-                startPage = currentPage;
+            const userStartPage = prompt(
+                "请输入要开始处理的页码 (按取消则从当前页开始)："
+            );
+            if (userStartPage && !isNaN(parseInt(userStartPage))) {
+                startPage = parseInt(userStartPage);
                 currentMinPage = startPage;
+                jumpToPage(currentMinPage);
             } else {
-                // 如果无法确定当前页，使用第一个页面
-                const firstPage = document.querySelector(".page-img-box");
-                if (firstPage) {
-                    startPage = parseInt(firstPage.getAttribute("index"));
+                // 从当前可见的页面开始
+                const currentPage = getCurrentVisiblePage();
+                if (currentPage !== null) {
+                    startPage = currentPage;
                     currentMinPage = startPage;
+                } else {
+                    // 如果无法确定当前页，使用第一个页面
+                    const firstPage = document.querySelector(".page-img-box");
+                    if (firstPage) {
+                        startPage = parseInt(firstPage.getAttribute("index"));
+                        currentMinPage = startPage;
+                    }
                 }
+                jumpToPage(currentMinPage);
             }
-        }
 
-        console.log(`开始处理，起始页为：${startPage}`);
-        updateStatusPanel(`<div style="font-size:12px;">
-            <b>开始处理</b><br>
-            起始页：第${startPage}页<br>
-            等待切片加载...
-        </div>`);
+            console.log(`开始处理，起始页为：${startPage}`);
+            updateStatusDisplay(`开始处理，起始页：第${startPage}页`);
+        } else {
+            // 重新开始，但保留已完成页面的记录
+            findAndJumpToNextPage();
+        }
 
         processExistingImages();
         setupObserver();
@@ -528,10 +854,10 @@
 
     // 页面加载完成后执行
     window.addEventListener("load", function () {
-        console.log("页面已加载，添加状态面板");
-        addStatusPanel();
+        console.log("页面已加载，添加交互界面");
+        addEnhancedUI();
     });
 
-    // 尝试立即添加状态面板
-    setTimeout(addStatusPanel, 500);
+    // 尝试立即添加交互界面
+    setTimeout(addEnhancedUI, 500);
 })();
