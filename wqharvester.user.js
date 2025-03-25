@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         文泉阅读器切片图片合并保存(增强版)
+// @name         文泉阅读器切片图片合并保存(修复版)
 // @namespace    http://tampermonkey.net/
-// @version      0.4
+// @version      0.5
 // @description  自动合并文泉阅读器中的切片大图并保存为完整页面，支持页面选择和自动跳转
 // @author       You
 // @match        https://wqbook.wqxuetang.com/deep/read/*
@@ -20,8 +20,14 @@
     // 当前处理的最小页面
     let currentMinPage = Infinity;
 
+    // 起始页面
+    let startPage = 1;
+
     // 已完成的页面集合
     const completedPages = new Set();
+
+    // 处理中的页面集合
+    const processingPages = new Set();
 
     // 初始化状态面板
     let statusPanel;
@@ -35,7 +41,7 @@
     // 更新状态面板信息
     function updateStatusPanel(message) {
         if (statusPanel) {
-            statusPanel.innerText = message;
+            statusPanel.innerHTML = message;
         }
     }
 
@@ -48,16 +54,22 @@
             pageBox.scrollIntoView({ behavior: "smooth", block: "start" });
             console.log(`已跳转到第${pageIndex}页`);
             updateStatusPanel(`已跳转到第${pageIndex}页`);
+        } else {
+            console.log(`找不到第${pageIndex}页元素`);
         }
     }
 
     // 处理并记录切片图片
     function processSliceImage(imgElement, bookId, pageIndex, leftValue) {
-        const sliceKey = `${bookId}_${pageIndex}_${leftValue}`;
+        // 如果页面小于起始页，直接跳过
+        if (parseInt(pageIndex) < startPage) {
+            return;
+        }
 
         // 初始化该页的切片集合
         if (!pageSlices[pageIndex]) {
             pageSlices[pageIndex] = new Map();
+            processingPages.add(pageIndex);
         }
 
         // 如果此切片已处理过，则跳过
@@ -67,14 +79,25 @@
 
         // 记录该切片
         pageSlices[pageIndex].set(leftValue, imgElement);
-        updateStatusPanel(
-            `正在处理: 第${pageIndex}页, 位置${leftValue}, 当前该页切片数: ${pageSlices[pageIndex].size}`
-        );
-        console.log(
-            `已记录切片: 页${pageIndex}, 位置${leftValue}, 当前该页切片数: ${pageSlices[pageIndex].size}`
-        );
 
-        // 更新当前最小页面
+        // 计算处理进度
+        const pageProgress = `<br>- 第${pageIndex}页：${pageSlices[pageIndex].size}个切片`;
+        const completedInfo =
+            completedPages.size > 0
+                ? `<br><br>已完成页面：${Array.from(completedPages)
+                      .sort((a, b) => a - b)
+                      .join(", ")}`
+                : "";
+
+        updateStatusPanel(`<div style="font-size:12px;">
+            <b>处理进度：</b>
+            ${pageProgress}
+            ${completedInfo}
+            <br><br>
+            <b>当前处理最小页面：</b> 第${currentMinPage}页
+        </div>`);
+
+        // 更新当前最小页面并跳转
         if (
             parseInt(pageIndex) < currentMinPage &&
             !completedPages.has(pageIndex)
@@ -83,7 +106,7 @@
             jumpToPage(currentMinPage);
         }
 
-        // 检查是否所有切片都已加载 (通常是6个)
+        // 检查是否所有切片都已加载
         checkAndMergePage(bookId, pageIndex);
     }
 
@@ -106,7 +129,11 @@
         console.log(`页${pageIndex} 切片状态: ${currentSlices}/${totalSlices}`);
 
         // 如果所有切片都已加载，合并为一张完整图片
-        if (currentSlices >= totalSlices && totalSlices > 0) {
+        if (
+            totalSlices > 0 &&
+            currentSlices >= totalSlices &&
+            !completedPages.has(pageIndex)
+        ) {
             updateStatusPanel(`所有切片已加载，开始合并第${pageIndex}页...`);
             console.log(`所有切片已加载，开始合并页${pageIndex}的切片...`);
             mergeAndSavePage(bookId, pageIndex);
@@ -115,8 +142,12 @@
 
     // 合并切片并保存为完整页面
     function mergeAndSavePage(bookId, pageIndex) {
-        if (!pageSlices[pageIndex] || pageSlices[pageIndex].size === 0) {
-            console.log(`页${pageIndex}没有可合并的切片`);
+        if (
+            !pageSlices[pageIndex] ||
+            pageSlices[pageIndex].size === 0 ||
+            completedPages.has(pageIndex)
+        ) {
+            console.log(`页${pageIndex}没有可合并的切片或已经处理过`);
             return;
         }
 
@@ -168,6 +199,7 @@
 
                         // 标记该页已处理完成
                         completedPages.add(pageIndex);
+                        processingPages.delete(pageIndex);
 
                         // 通知
                         GM_notification({
@@ -180,7 +212,8 @@
                             `第${pageIndex}页处理完成！已保存为 ${filename}`
                         );
 
-                        // 找到下一个未完成的最小页面
+                        // 在本页处理完成后，立即查找并跳转到下一页
+                        console.log("准备查找下一个页面...");
                         findAndJumpToNextPage();
                     }, 100);
                 },
@@ -194,25 +227,51 @@
 
     // 找到下一个未完成的最小页面并跳转
     function findAndJumpToNextPage() {
-        const allPageIndices = Object.keys(pageSlices)
-            .map((idx) => parseInt(idx))
-            .sort((a, b) => a - b);
+        console.log("查找下一个未完成页面...");
+        console.log("已完成页面:", Array.from(completedPages));
+
+        // 获取所有页码并排序
+        const allPages = document.querySelectorAll(".page-img-box");
+        const allPageIndices = [];
+
+        allPages.forEach((page) => {
+            const idx = parseInt(page.getAttribute("index"));
+            if (idx >= startPage) {
+                allPageIndices.push(idx);
+            }
+        });
+
+        allPageIndices.sort((a, b) => a - b);
+        console.log("所有页面:", allPageIndices);
 
         // 找到下一个未完成的最小页面
         let nextPage = null;
         for (let i = 0; i < allPageIndices.length; i++) {
-            if (!completedPages.has(allPageIndices[i].toString())) {
-                nextPage = allPageIndices[i];
+            const pageIdx = allPageIndices[i].toString();
+            if (
+                !completedPages.has(pageIdx) &&
+                parseInt(pageIdx) >= startPage
+            ) {
+                nextPage = parseInt(pageIdx);
                 break;
             }
         }
 
+        console.log("找到的下一页:", nextPage);
+
         if (nextPage !== null) {
             currentMinPage = nextPage;
+            console.log(`跳转到下一页: ${nextPage}`);
             jumpToPage(nextPage);
             updateStatusPanel(`跳转到下一个待处理页面: 第${nextPage}页`);
         } else {
-            updateStatusPanel("所有页面处理完成！");
+            updateStatusPanel(`<div style="font-size:12px;">
+                <b>处理完成！</b><br><br>
+                已完成页面：${Array.from(completedPages)
+                    .sort((a, b) => a - b)
+                    .join(", ")}
+            </div>`);
+
             GM_notification({
                 title: "处理完成",
                 text: "所有页面都已合并保存！",
@@ -228,8 +287,9 @@
 
         document.querySelectorAll(".page-img-box").forEach((pageBox) => {
             const pageIndex = pageBox.getAttribute("index");
-            const plgContainer = pageBox.querySelector(".plg");
+            if (parseInt(pageIndex) < startPage) return;
 
+            const plgContainer = pageBox.querySelector(".plg");
             if (!plgContainer) return;
 
             // 获取所有已加载的切片图片
@@ -270,6 +330,7 @@
                             const pageBox = node.closest(".page-img-box");
                             if (pageBox) {
                                 const pageIndex = pageBox.getAttribute("index");
+                                if (parseInt(pageIndex) < startPage) return;
 
                                 if (node.complete && node.naturalHeight !== 0) {
                                     const leftValue =
@@ -311,27 +372,24 @@
         observer.observe(document.body, config);
     }
 
-    // 添加控制面板
-    function addControlPanel() {
+    // 添加简化的状态面板
+    function addStatusPanel() {
         const panel = document.createElement("div");
         panel.style.position = "fixed";
         panel.style.top = "10px";
         panel.style.right = "10px";
-        panel.style.backgroundColor = "rgba(0,0,0,0.7)";
-        panel.style.color = "white";
+        panel.style.backgroundColor = "rgba(255,255,255,0.95)";
+        panel.style.color = "#333";
         panel.style.padding = "10px";
         panel.style.borderRadius = "5px";
         panel.style.zIndex = "9999";
-        panel.style.width = "250px";
+        panel.style.width = "220px";
         panel.style.fontFamily = "Arial, sans-serif";
+        panel.style.boxShadow = "0 0 10px rgba(0,0,0,0.3)";
         panel.innerHTML = `
             <div style="font-weight:bold;margin-bottom:10px;font-size:14px;border-bottom:1px solid #ccc;padding-bottom:5px;">文泉切片合并工具</div>
-            <div style="margin-bottom:10px;">
-                <button id="checkAndMergeAll" style="margin-right:5px;padding:3px 8px;">合并所有页面</button>
-                <button id="goToPage" style="padding:3px 8px;">跳转到页面</button>
-            </div>
-            <div id="statusDisplay" style="font-size:12px;margin-top:10px;min-height:40px;border-top:1px solid #555;padding-top:5px;">
-                等待操作...
+            <div id="statusDisplay" style="font-size:12px;min-height:40px;">
+                准备中...
             </div>
         `;
 
@@ -339,45 +397,32 @@
 
         // 保存状态显示区域的引用
         statusPanel = document.getElementById("statusDisplay");
-
-        document
-            .getElementById("checkAndMergeAll")
-            .addEventListener("click", () => {
-                const bookId = getBookId();
-                // 合并所有已记录的页面
-                Object.keys(pageSlices).forEach((pageIndex) => {
-                    checkAndMergePage(bookId, pageIndex);
-                });
-            });
-
-        document.getElementById("goToPage").addEventListener("click", () => {
-            const page = prompt("请输入要跳转的页码：");
-            if (page && !isNaN(parseInt(page))) {
-                jumpToPage(parseInt(page));
-            }
-        });
     }
 
     // 初始化脚本，询问起始页面
     function initScript() {
-        const startPage = prompt(
+        const userStartPage = prompt(
             "请输入要开始处理的页码 (按取消则从当前页开始)："
         );
-        if (startPage && !isNaN(parseInt(startPage))) {
-            currentMinPage = parseInt(startPage);
+        if (userStartPage && !isNaN(parseInt(userStartPage))) {
+            startPage = parseInt(userStartPage);
+            currentMinPage = startPage;
             jumpToPage(currentMinPage);
         } else {
             // 从显示的第一页开始
             const firstVisiblePage = document.querySelector(".page-img-box");
             if (firstVisiblePage) {
-                currentMinPage = parseInt(
-                    firstVisiblePage.getAttribute("index")
-                );
+                startPage = parseInt(firstVisiblePage.getAttribute("index"));
+                currentMinPage = startPage;
             }
         }
 
-        console.log(`开始处理，起始页为：${currentMinPage}`);
-        updateStatusPanel(`开始处理，起始页为：第${currentMinPage}页`);
+        console.log(`开始处理，起始页为：${startPage}`);
+        updateStatusPanel(`<div style="font-size:12px;">
+            <b>开始处理</b><br>
+            起始页：第${startPage}页<br>
+            等待切片加载...
+        </div>`);
 
         processExistingImages();
         setupObserver();
@@ -385,13 +430,13 @@
 
     // 页面加载完成后执行
     window.addEventListener("load", function () {
-        console.log("页面已加载，添加控制面板");
-        addControlPanel();
+        console.log("页面已加载，添加状态面板");
+        addStatusPanel();
 
         // 延迟执行初始化，等待页面完全加载
         setTimeout(initScript, 1000);
     });
 
-    // 尝试立即添加控制面板
-    setTimeout(addControlPanel, 500);
+    // 尝试立即添加状态面板
+    setTimeout(addStatusPanel, 500);
 })();
