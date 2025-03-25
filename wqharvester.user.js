@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         文泉阅读器切片图片合并保存(修复版)
+// @name         文泉阅读器切片图片合并保存(完善版)
 // @namespace    http://tampermonkey.net/
-// @version      0.5
+// @version      0.6
 // @description  自动合并文泉阅读器中的切片大图并保存为完整页面，支持页面选择和自动跳转
 // @author       You
 // @match        https://wqbook.wqxuetang.com/deep/read/*
@@ -31,6 +31,12 @@
 
     // 初始化状态面板
     let statusPanel;
+
+    // 脚本是否已初始化
+    let isInitialized = false;
+
+    // 是否有面板已创建
+    let panelCreated = false;
 
     // 提取书籍ID
     function getBookId() {
@@ -372,9 +378,19 @@
         observer.observe(document.body, config);
     }
 
-    // 添加简化的状态面板
+    // 添加状态面板
     function addStatusPanel() {
+        // 确保只创建一个面板
+        if (panelCreated) return;
+
+        // 移除可能存在的旧面板
+        const oldPanel = document.getElementById("wqSlicerPanel");
+        if (oldPanel) {
+            oldPanel.remove();
+        }
+
         const panel = document.createElement("div");
+        panel.id = "wqSlicerPanel";
         panel.style.position = "fixed";
         panel.style.top = "10px";
         panel.style.right = "10px";
@@ -388,19 +404,35 @@
         panel.style.boxShadow = "0 0 10px rgba(0,0,0,0.3)";
         panel.innerHTML = `
             <div style="font-weight:bold;margin-bottom:10px;font-size:14px;border-bottom:1px solid #ccc;padding-bottom:5px;">文泉切片合并工具</div>
-            <div id="statusDisplay" style="font-size:12px;min-height:40px;">
-                准备中...
+            <button id="startButton" style="margin:5px 0;padding:5px 10px;background:#4CAF50;color:white;border:none;border-radius:3px;cursor:pointer;width:100%;">开始处理</button>
+            <div id="statusDisplay" style="font-size:12px;min-height:40px;margin-top:10px;">
+                点击"开始处理"按钮来启动工具
             </div>
         `;
 
         document.body.appendChild(panel);
+        panelCreated = true;
 
         // 保存状态显示区域的引用
         statusPanel = document.getElementById("statusDisplay");
+
+        // 添加开始按钮事件
+        document
+            .getElementById("startButton")
+            .addEventListener("click", function () {
+                if (!isInitialized) {
+                    this.disabled = true;
+                    this.textContent = "处理中...";
+                    this.style.backgroundColor = "#888";
+                    initScript();
+                }
+            });
     }
 
     // 初始化脚本，询问起始页面
     function initScript() {
+        if (isInitialized) return;
+
         const userStartPage = prompt(
             "请输入要开始处理的页码 (按取消则从当前页开始)："
         );
@@ -426,15 +458,13 @@
 
         processExistingImages();
         setupObserver();
+        isInitialized = true;
     }
 
     // 页面加载完成后执行
     window.addEventListener("load", function () {
         console.log("页面已加载，添加状态面板");
         addStatusPanel();
-
-        // 延迟执行初始化，等待页面完全加载
-        setTimeout(initScript, 1000);
     });
 
     // 尝试立即添加状态面板
