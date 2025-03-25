@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WQHarvester 文泉收割机
 // @namespace    http://tampermonkey.net/
-// @version      1.3
+// @version      1.4
 // @description  下载文泉书局已购电子书，自动合并阅读器中的书页切片并下载为完整页面图片，需结合仓库里的另一个 Python 脚本使用。
 // @author       zetaloop
 // @homepage     https://github.com/zetaloop/WQHarvester
@@ -216,7 +216,7 @@
         return bestVisiblePage;
     }
 
-    // 跳转到指定页面（带验证和重试），延时缩短为500ms，确保同时只有一个跳转等待
+    // 修改后的跳转函数：滚动后立即尝试合并，500ms后检查视口位置，如未到位则重试滚动
     function jumpToPage(pageIndex, isRetry = false) {
         const pageBox = document.querySelector(
             `.page-img-box[index="${pageIndex}"]`
@@ -229,6 +229,14 @@
         pageBox.scrollIntoView({ behavior: "smooth", block: "start" });
         console.log(`正在跳转第${pageIndex}页${isRetry ? "(重试)" : ""}`);
         updateStatusDisplay(`正在跳转第${pageIndex}页...`);
+
+        // 立即检查：如果该页已标记为待合并，则立刻开始合并
+        if (pendingPages.has(pageIndex.toString()) && isRunning) {
+            console.log(`当前活动页面${pageIndex}切片已加载，立即开始合并...`);
+            mergeAndSavePage(getBookId(), pageIndex.toString());
+        }
+
+        // 500ms后检查当前视口是否正确，如有偏差则重试滚动，并强制调用页面完成检测
         if (jumpTimeout) clearTimeout(jumpTimeout);
         jumpTimeout = setTimeout(() => {
             jumpTimeout = null;
@@ -244,12 +252,6 @@
             } else {
                 updateStatusDisplay(`已定位到第${pageIndex}页附近`);
                 activePage = pageIndex;
-                if (pendingPages.has(pageIndex.toString()) && isRunning) {
-                    console.log(
-                        `当前活动页面${pageIndex}切片已加载，开始合并...`
-                    );
-                    mergeAndSavePage(getBookId(), pageIndex.toString());
-                }
                 if (pageSlices[pageIndex]) {
                     updateProgressBar(pageIndex, pageSlices[pageIndex]);
                     updateCurrentPageInfo(
@@ -261,6 +263,8 @@
                         `当前页面：<b>第${pageIndex}页</b> (尚未加载切片)`
                     );
                 }
+                // 强制再次检查页面是否已完成加载
+                checkPageCompletion(getBookId(), pageIndex);
             }
         }, 500);
     }
