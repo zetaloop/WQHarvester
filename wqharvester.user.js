@@ -1,20 +1,21 @@
 // ==UserScript==
-// @name         文泉阅读器切片图片保存(改进版)
+// @name         文泉阅读器切片图片合并保存
 // @namespace    http://tampermonkey.net/
-// @version      0.2
-// @description  自动保存文泉阅读器中的切片大图(支持一次性URL)
+// @version      0.3
+// @description  自动合并文泉阅读器中的切片大图并保存为完整页面
 // @author       You
 // @match        https://wqbook.wqxuetang.com/deep/read/*
 // @match        *://wqbook.wqxuetang.com/deep/read/*
 // @grant        GM_notification
-// @grant        GM_setValue
-// @grant        GM_getValue
 // ==/UserScript==
 
 (function () {
     "use strict";
 
-    console.log("文泉切片图片保存脚本已加载");
+    console.log("文泉切片图片合并保存脚本已加载");
+
+    // 跟踪每页的切片加载情况
+    const pageSlices = {};
 
     // 提取书籍ID
     function getBookId() {
@@ -22,55 +23,111 @@
         return urlParams.get("bid") || "unknown";
     }
 
-    // 已处理的图片URLs集合，避免重复下载
-    const processedImages = new Set();
+    // 处理并记录切片图片
+    function processSliceImage(imgElement, bookId, pageIndex, leftValue) {
+        const sliceKey = `${bookId}_${pageIndex}_${leftValue}`;
 
-    // 通过Canvas下载图片
-    function downloadImageViaCanvas(imgElement, bookId, pageIndex, sliceIndex) {
-        const imgUrl = imgElement.src;
+        // 初始化该页的切片集合
+        if (!pageSlices[pageIndex]) {
+            pageSlices[pageIndex] = new Map();
+        }
 
-        // 如果已经处理过这个URL，则跳过
-        if (processedImages.has(imgUrl)) {
+        // 如果此切片已处理过，则跳过
+        if (pageSlices[pageIndex].has(leftValue)) {
             return;
         }
 
-        const filename = `${bookId}_${pageIndex}_${sliceIndex}.webp`;
-        console.log(`正在处理: ${filename}`);
+        // 记录该切片
+        pageSlices[pageIndex].set(leftValue, imgElement);
+        console.log(
+            `已记录切片: 页${pageIndex}, 位置${leftValue}, 当前该页切片数: ${pageSlices[pageIndex].size}`
+        );
+
+        // 检查是否所有切片都已加载 (通常是6个)
+        checkAndMergePage(bookId, pageIndex);
+    }
+
+    // 检查页面切片是否完整并合并
+    function checkAndMergePage(bookId, pageIndex) {
+        const pageBox = document.querySelector(
+            `.page-img-box[index="${pageIndex}"]`
+        );
+        if (!pageBox) return;
+
+        const plgContainer = pageBox.querySelector(".plg");
+        if (!plgContainer) return;
+
+        // 获取该页面应有的切片总数
+        const totalSlices = plgContainer.querySelectorAll("img").length;
+        const currentSlices = pageSlices[pageIndex]
+            ? pageSlices[pageIndex].size
+            : 0;
+
+        console.log(`页${pageIndex} 切片状态: ${currentSlices}/${totalSlices}`);
+
+        // 如果所有切片都已加载，合并为一张完整图片
+        if (currentSlices >= totalSlices && totalSlices > 0) {
+            console.log(`所有切片已加载，开始合并页${pageIndex}的切片...`);
+            mergeAndSavePage(bookId, pageIndex);
+        }
+    }
+
+    // 合并切片并保存为完整页面
+    function mergeAndSavePage(bookId, pageIndex) {
+        if (!pageSlices[pageIndex] || pageSlices[pageIndex].size === 0) {
+            console.log(`页${pageIndex}没有可合并的切片`);
+            return;
+        }
 
         try {
-            // 创建canvas元素
+            // 将切片按从左到右排序
+            const sortedSlices = Array.from(
+                pageSlices[pageIndex].entries()
+            ).sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]));
+
+            // 计算合并后图片的总宽度和高度
+            let totalWidth = 0;
+            let maxHeight = 0;
+
+            sortedSlices.forEach(([left, img]) => {
+                totalWidth += img.naturalWidth;
+                maxHeight = Math.max(maxHeight, img.naturalHeight);
+            });
+
+            // 创建画布
             const canvas = document.createElement("canvas");
+            canvas.width = totalWidth;
+            canvas.height = maxHeight;
             const ctx = canvas.getContext("2d");
 
-            // 设置canvas尺寸与图片一致
-            canvas.width = imgElement.naturalWidth;
-            canvas.height = imgElement.naturalHeight;
+            // 在画布上从左到右绘制切片
+            let currentX = 0;
+            sortedSlices.forEach(([left, img]) => {
+                ctx.drawImage(img, currentX, 0);
+                currentX += img.naturalWidth;
+            });
 
-            // 在canvas上绘制图片
-            ctx.drawImage(imgElement, 0, 0);
+            // 保存合并后的图片
+            const filename = `${bookId}_page${pageIndex}_complete.webp`;
 
-            // 转换为blob并下载
             canvas.toBlob(
                 function (blob) {
-                    // 创建下载链接
                     const link = document.createElement("a");
                     link.href = URL.createObjectURL(blob);
                     link.download = filename;
                     link.style.display = "none";
 
-                    // 添加到文档并触发下载
                     document.body.appendChild(link);
                     link.click();
 
-                    // 清理
                     setTimeout(() => {
                         URL.revokeObjectURL(link.href);
                         document.body.removeChild(link);
-                        console.log(`已保存: ${filename}`);
+                        console.log(`已保存合并页面: ${filename}`);
                         GM_notification({
-                            title: "图片已保存",
+                            title: "页面已合并保存",
                             text: filename,
-                            timeout: 2000,
+                            timeout: 3000,
                         });
                     }, 100);
                 },
@@ -78,10 +135,10 @@
                 0.95
             );
 
-            // 标记为已处理
-            processedImages.add(imgUrl);
+            // 标记该页已处理完成
+            console.log(`页${pageIndex}处理完成`);
         } catch (error) {
-            console.error(`处理失败: ${filename}`, error);
+            console.error(`合并页${pageIndex}失败:`, error);
         }
     }
 
@@ -102,18 +159,13 @@
             sliceImages.forEach((img) => {
                 if (img.complete && img.naturalHeight !== 0) {
                     // 提取left值作为sliceIndex
-                    const leftValue = parseInt(img.style.left) || 0;
-                    downloadImageViaCanvas(img, bookId, pageIndex, leftValue);
+                    const leftValue = parseFloat(img.style.left) || 0;
+                    processSliceImage(img, bookId, pageIndex, leftValue);
                 } else {
                     // 图片尚未加载完成，添加加载事件
                     img.addEventListener("load", function () {
-                        const leftValue = parseInt(img.style.left) || 0;
-                        downloadImageViaCanvas(
-                            img,
-                            bookId,
-                            pageIndex,
-                            leftValue
-                        );
+                        const leftValue = parseFloat(img.style.left) || 0;
+                        processSliceImage(img, bookId, pageIndex, leftValue);
                     });
                 }
             });
@@ -139,11 +191,11 @@
                             const pageBox = node.closest(".page-img-box");
                             if (pageBox) {
                                 const pageIndex = pageBox.getAttribute("index");
-                                const leftValue =
-                                    parseInt(node.style.left) || 0;
 
                                 if (node.complete && node.naturalHeight !== 0) {
-                                    downloadImageViaCanvas(
+                                    const leftValue =
+                                        parseFloat(node.style.left) || 0;
+                                    processSliceImage(
                                         node,
                                         bookId,
                                         pageIndex,
@@ -151,13 +203,13 @@
                                     );
                                 } else {
                                     node.addEventListener("load", function () {
-                                        const currentLeftValue =
-                                            parseInt(node.style.left) || 0;
-                                        downloadImageViaCanvas(
+                                        const leftValue =
+                                            parseFloat(node.style.left) || 0;
+                                        processSliceImage(
                                             node,
                                             bookId,
                                             pageIndex,
-                                            currentLeftValue
+                                            leftValue
                                         );
                                     });
                                 }
@@ -170,10 +222,10 @@
 
         // 配置观察器选项
         const config = {
-            childList: true, // 观察子节点的添加或删除
-            subtree: true, // 观察整个子树
-            attributes: true, // 观察属性变化
-            attributeFilter: ["src", "style"], // 仅观察特定属性
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ["src", "style"],
         };
 
         // 开始观察整个document
@@ -192,57 +244,39 @@
         panel.style.borderRadius = "5px";
         panel.style.zIndex = "9999";
         panel.innerHTML = `
-            <div>文泉切片保存工具</div>
-            <button id="saveCurrentPage">保存当前页</button>
-            <button id="saveAllPages">保存所有页</button>
+            <div>文泉切片合并工具</div>
+            <button id="checkAndMergeAll">合并所有已加载页面</button>
+            <button id="refreshCurrentPage">刷新当前页检测</button>
         `;
 
         document.body.appendChild(panel);
 
         document
-            .getElementById("saveCurrentPage")
-            .addEventListener("click", processExistingImages);
-        document
-            .getElementById("saveAllPages")
+            .getElementById("checkAndMergeAll")
             .addEventListener("click", () => {
-                // 触发所有页面的保存
-                document
-                    .querySelectorAll(".page-img-box")
-                    .forEach((pageBox) => {
-                        const pageIndex = pageBox.getAttribute("index");
-                        console.log(`处理页面 ${pageIndex}...`);
-                        const plgContainer = pageBox.querySelector(".plg");
-
-                        if (!plgContainer) return;
-
-                        // 获取所有已加载的切片图片
-                        const sliceImages =
-                            plgContainer.querySelectorAll("img");
-
-                        sliceImages.forEach((img) => {
-                            if (img.complete && img.naturalHeight !== 0) {
-                                const leftValue = parseInt(img.style.left) || 0;
-                                downloadImageViaCanvas(
-                                    img,
-                                    getBookId(),
-                                    pageIndex,
-                                    leftValue
-                                );
-                            }
-                        });
-                    });
+                const bookId = getBookId();
+                // 合并所有已记录的页面
+                Object.keys(pageSlices).forEach((pageIndex) => {
+                    checkAndMergePage(bookId, pageIndex);
+                });
             });
+
+        document
+            .getElementById("refreshCurrentPage")
+            .addEventListener("click", processExistingImages);
     }
 
     // 页面加载完成后执行
     window.addEventListener("load", function () {
         console.log("页面已加载，开始处理图片");
-        addControlPanel();
+        processExistingImages();
         setupObserver();
+        addControlPanel();
     });
 
     // 也尝试立即执行一次，处理可能已经加载的图片
     setTimeout(() => {
+        processExistingImages();
         setupObserver();
         addControlPanel();
     }, 1500);
