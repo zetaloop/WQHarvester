@@ -1,9 +1,10 @@
 // ==UserScript==
-// @name         文泉阅读器切片图片合并保存(高级交互版) - 优化点击重载、颜色与文件名
+// @name         WQHarvester 文泉收割机
 // @namespace    http://tampermonkey.net/
 // @version      1.2
-// @description  自动合并文泉阅读器中的切片大图并保存为完整页面，支持页面选择、双进度显示、自动点击“重新加载本页”按钮，以及切片加载次数区分颜色（第一次为淡绿色，重复为深绿色）
-// @author       You
+// @description  下载文泉书局已购电子书，自动合并阅读器中的书页切片并下载为完整页面图片，需结合仓库里的另一个 Python 脚本使用。
+// @author       zetaloop
+// @homepage     https://github.com/zetaloop/WQHarvester
 // @match        https://wqbook.wqxuetang.com/deep/read/*
 // @match        *://wqbook.wqxuetang.com/deep/read/*
 // @grant        none
@@ -12,7 +13,7 @@
 (function () {
     "use strict";
 
-    console.log("文泉切片图片合并保存脚本已加载");
+    console.log("文泉收割机已加载");
 
     // 跟踪每页的切片加载情况，key为页面index，值为Map {leftValue -> {img, count}}
     const pageSlices = {};
@@ -215,8 +216,8 @@
             return;
         }
         pageBox.scrollIntoView({ behavior: "smooth", block: "start" });
-        console.log(`正在跳转到第${pageIndex}页${isRetry ? "(重试)" : ""}`);
-        updateStatusDisplay(`正在跳转到第${pageIndex}页...`);
+        console.log(`正在跳转第${pageIndex}页${isRetry ? "(重试)" : ""}`);
+        updateStatusDisplay(`正在跳转第${pageIndex}页...`);
         if (jumpTimeout) clearTimeout(jumpTimeout);
         jumpTimeout = setTimeout(() => {
             jumpTimeout = null;
@@ -531,7 +532,7 @@
         style.textContent = `
             #wqSlicerPanel {
                 position: fixed;
-                top: 10px;
+                top: 100px;
                 right: 10px;
                 background-color: rgba(255,255,255,0.97);
                 color: #333;
@@ -608,7 +609,7 @@
         panel.id = "wqSlicerPanel";
         panel.innerHTML = `
             <div class="panel-header">
-                <span>文泉切片合并工具</span>
+                <span>文泉收割机</span>
             </div>
             <div class="panel-section">
                 <div class="buttons-container">
