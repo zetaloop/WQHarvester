@@ -226,7 +226,7 @@
             updateStatusDisplay(`找不到第${pageIndex}页元素`);
             return;
         }
-        pageBox.scrollIntoView({ behavior: "smooth", block: "start" });
+        pageBox.scrollIntoView({ behavior: "smooth", block: "end" });
         console.log(`正在跳转第${pageIndex}页${isRetry ? "(重试)" : ""}`);
         updateStatusDisplay(`正在跳转第${pageIndex}页...`);
 
@@ -250,7 +250,7 @@
                 console.log(`跳转偏差过大，再次尝试跳转到第${pageIndex}页`);
                 jumpToPage(pageIndex, true);
             } else {
-                updateStatusDisplay(`已定位到第${pageIndex}页附近`);
+                updateStatusDisplay(`正在转到第${pageIndex}页...`);
                 activePage = pageIndex;
                 if (pageSlices[pageIndex]) {
                     updateProgressBar(pageIndex, pageSlices[pageIndex]);
