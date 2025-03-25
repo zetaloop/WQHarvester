@@ -73,15 +73,23 @@
 
     // 自动检测并点击“重新加载本页”按钮（每秒检测一次）
     function checkReloadButton() {
-        const buttons = document.querySelectorAll("button");
-        buttons.forEach((btn) => {
-            if (
-                btn.textContent.trim() === "重新加载本页" &&
-                btn.offsetParent !== null
-            ) {
-                console.log("检测到‘重新加载本页’按钮，自动点击");
-                updateStatusDisplay("检测到重载按钮，正在点击...");
-                btn.click();
+        const reloadButtons = document.querySelectorAll(".reload_image");
+        reloadButtons.forEach((btn) => {
+            if (btn.offsetParent !== null) {
+                // 如果元素可见
+                const pageBox = btn.closest(".page-img-box");
+                if (pageBox) {
+                    const pageIndex = pageBox.getAttribute("index");
+                    if (!completedPages.has(pageIndex)) {
+                        console.log(
+                            `检测到页面 ${pageIndex} 的“重新加载本页”按钮，自动点击`
+                        );
+                        updateStatusDisplay(
+                            `检测到页面 ${pageIndex} 重载按钮，正在点击...`
+                        );
+                        btn.click();
+                    }
+                }
             }
         });
     }
