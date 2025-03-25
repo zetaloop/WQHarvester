@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         文泉阅读器切片图片合并保存(高级交互版) - 优化跳转与双进度显示
+// @name         文泉阅读器切片图片合并保存(高级交互版) - 优化点击重载、颜色与文件名
 // @namespace    http://tampermonkey.net/
-// @version      1.1
-// @description  自动合并文泉阅读器中的切片大图并保存为完整页面，支持页面选择、双进度显示和更快的页面跳转
+// @version      1.2
+// @description  自动合并文泉阅读器中的切片大图并保存为完整页面，支持页面选择、双进度显示、自动点击“重新加载本页”按钮，以及切片加载次数区分颜色（第一次为淡绿色，重复为深绿色）
 // @author       You
 // @match        https://wqbook.wqxuetang.com/deep/read/*
 // @match        *://wqbook.wqxuetang.com/deep/read/*
@@ -14,7 +14,7 @@
 
     console.log("文泉切片图片合并保存脚本已加载");
 
-    // 跟踪每页的切片加载情况
+    // 跟踪每页的切片加载情况，key为页面index，值为Map {leftValue -> {img, count}}
     const pageSlices = {};
 
     // 当前处理的最小页面
@@ -29,7 +29,7 @@
     // 待合并的页面集合（切片已加载完成但尚未合并）
     const pendingPages = new Set();
 
-    // 处理中的页面集合（正在等待切片加载中）
+    // 处理中的页面集合（等待切片加载中）
     const processingPages = new Set();
 
     // 当前活动页面（用于控制只合并当前页）
@@ -61,10 +61,28 @@
     // 消息定时器
     let noticeTimer = null;
 
+    // 自动点击“重新加载本页”按钮的定时器
+    let reloadInterval = null;
+
     // 提取书籍ID
     function getBookId() {
         const urlParams = new URLSearchParams(window.location.search);
         return urlParams.get("bid") || "unknown";
+    }
+
+    // 自动检测并点击“重新加载本页”按钮（每秒检测一次）
+    function checkReloadButton() {
+        const buttons = document.querySelectorAll("button");
+        buttons.forEach((btn) => {
+            if (
+                btn.textContent.trim() === "重新加载本页" &&
+                btn.offsetParent !== null
+            ) {
+                console.log("检测到‘重新加载本页’按钮，自动点击");
+                updateStatusDisplay("检测到重载按钮，正在点击...");
+                btn.click();
+            }
+        });
     }
 
     // 显示临时通知消息
@@ -85,18 +103,17 @@
         }
     }
 
-    // 更新当前页面加载进度显示
+    // 更新当前页面加载进度显示（针对切片加载进度，显示当前页及加载的切片数量）
     function updateCurrentPageInfo(message) {
         if (currentPageInfo) {
             currentPageInfo.innerHTML = message;
         }
     }
 
-    // 更新当前页面的加载进度条（基于切片加载情况）
+    // 更新当前页面的加载进度条（基于切片加载情况，按left区间分6块；颜色根据加载次数）
     function updateProgressBar(pageIndex, slices) {
         if (!progressDisplay) return;
         progressDisplay.innerHTML = "";
-        // 当切片信息不存在时，显示空进度条（6个块）
         if (!slices || slices.size === 0) {
             progressDisplay.innerHTML = `
                 <div class="progress-container">
@@ -110,17 +127,21 @@
             `;
             return;
         }
-        // 按left值排序切片（从小到大）
-        const sortedSlices = Array.from(slices.keys())
-            .map((key) => parseFloat(key))
-            .sort((a, b) => a - b);
-        const minLeft = sortedSlices[0];
-        const maxLeft = sortedSlices[sortedSlices.length - 1];
+        // 获取所有切片条目，并转换left为数字，保留count信息
+        const sliceEntries = Array.from(slices.entries()).map(([left, obj]) => [
+            parseFloat(left),
+            obj,
+        ]);
+        sliceEntries.sort((a, b) => a[0] - b[0]);
+        const minLeft = sliceEntries[0][0];
+        const maxLeft = sliceEntries[sliceEntries.length - 1][0];
         const range = maxLeft - minLeft;
-        const interval = range / 5; // 6段
+        const interval = range / 5; // 分成6段
 
         const container = document.createElement("div");
         container.className = "progress-container";
+
+        // 为每个区间创建一个进度块
         for (let i = 0; i < 6; i++) {
             const lowerBound =
                 i === 0 ? minLeft - 0.1 : minLeft + interval * (i - 0.01);
@@ -128,17 +149,29 @@
                 i === 5 ? maxLeft + 0.1 : minLeft + interval * (i + 1.01);
             const progressItem = document.createElement("div");
             progressItem.className = "progress-item";
-            // 如果此区间内存在切片，标记为加载完成
-            const hasSlice = sortedSlices.some(
-                (left) => left >= lowerBound && left <= upperBound
+
+            // 找到落在该区间的切片，计算最大加载次数
+            const entriesInInterval = sliceEntries.filter(
+                ([left, obj]) => left >= lowerBound && left <= upperBound
             );
-            if (hasSlice) progressItem.classList.add("loaded");
+            if (entriesInInterval.length > 0) {
+                const maxCount = Math.max(
+                    ...entriesInInterval.map((e) => e[1].count)
+                );
+                // 第一次加载（count==1）使用淡绿色，否则使用深绿色
+                if (maxCount === 1) {
+                    progressItem.classList.add("loaded-light");
+                } else {
+                    progressItem.classList.add("loaded-dark");
+                }
+            }
             container.appendChild(progressItem);
         }
+
         progressDisplay.appendChild(container);
     }
 
-    // 更新合并进度显示：显示已合并页面数和总页面数
+    // 更新合并进度显示（显示已合并页数 / 总页数）
     function updateMergedProgress() {
         if (!mergedProgressDisplay) return;
         const totalPages = document.querySelectorAll(".page-img-box").length;
@@ -171,7 +204,7 @@
         return bestVisiblePage;
     }
 
-    // 跳转到指定页面（带验证和重试），加快延时并确保只有一个跳转等待
+    // 跳转到指定页面（带验证和重试），延时缩短为500ms，确保同时只有一个跳转等待
     function jumpToPage(pageIndex, isRetry = false) {
         const pageBox = document.querySelector(
             `.page-img-box[index="${pageIndex}"]`
@@ -184,13 +217,9 @@
         pageBox.scrollIntoView({ behavior: "smooth", block: "start" });
         console.log(`正在跳转到第${pageIndex}页${isRetry ? "(重试)" : ""}`);
         updateStatusDisplay(`正在跳转到第${pageIndex}页...`);
-
-        // 清除前一个跳转定时器（确保同时只有一个）
         if (jumpTimeout) clearTimeout(jumpTimeout);
-
-        // 缩短延时为500ms
         jumpTimeout = setTimeout(() => {
-            jumpTimeout = null; // 清空
+            jumpTimeout = null;
             const currentPage = getCurrentVisiblePage();
             console.log(`跳转后检测: 目标=${pageIndex}, 当前=${currentPage}`);
             if (
@@ -205,7 +234,7 @@
                 activePage = pageIndex;
                 if (pendingPages.has(pageIndex.toString()) && isRunning) {
                     console.log(
-                        `当前活动页面${pageIndex}的所有切片已加载，开始合并...`
+                        `当前活动页面${pageIndex}切片已加载，开始合并...`
                     );
                     mergeAndSavePage(getBookId(), pageIndex.toString());
                 }
@@ -224,15 +253,21 @@
         }, 500);
     }
 
-    // 处理并记录单个切片图片
+    // 处理并记录单个切片图片（同一 left 值如果重复，则累加 count）
     function processSliceImage(imgElement, bookId, pageIndex, leftValue) {
         if (!isRunning || parseInt(pageIndex) < startPage) return;
         if (!pageSlices[pageIndex]) {
             pageSlices[pageIndex] = new Map();
             processingPages.add(pageIndex);
         }
-        if (pageSlices[pageIndex].has(leftValue)) return; // 去重：以bookid、index、slice三元组为准
-        pageSlices[pageIndex].set(leftValue, imgElement);
+        if (pageSlices[pageIndex].has(leftValue)) {
+            // 重复加载，累加计数
+            let entry = pageSlices[pageIndex].get(leftValue);
+            entry.count++;
+            pageSlices[pageIndex].set(leftValue, entry);
+        } else {
+            pageSlices[pageIndex].set(leftValue, { img: imgElement, count: 1 });
+        }
         if (activePage == pageIndex) {
             updateProgressBar(pageIndex, pageSlices[pageIndex]);
             updateCurrentPageInfo(
@@ -276,7 +311,7 @@
         }
     }
 
-    // 合并切片并保存为完整页面
+    // 合并切片并保存为完整页面（保存文件名不带 _complete）
     function mergeAndSavePage(bookId, pageIndex) {
         if (
             !pageSlices[pageIndex] ||
@@ -293,20 +328,21 @@
             ).sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]));
             let totalWidth = 0,
                 maxHeight = 0;
-            sortedSlices.forEach(([left, img]) => {
-                totalWidth += img.naturalWidth;
-                maxHeight = Math.max(maxHeight, img.naturalHeight);
+            sortedSlices.forEach(([left, entry]) => {
+                totalWidth += entry.img.naturalWidth;
+                maxHeight = Math.max(maxHeight, entry.img.naturalHeight);
             });
             const canvas = document.createElement("canvas");
             canvas.width = totalWidth;
             canvas.height = maxHeight;
             const ctx = canvas.getContext("2d");
             let currentX = 0;
-            sortedSlices.forEach(([left, img]) => {
-                ctx.drawImage(img, currentX, 0);
-                currentX += img.naturalWidth;
+            sortedSlices.forEach(([left, entry]) => {
+                ctx.drawImage(entry.img, currentX, 0);
+                currentX += entry.img.naturalWidth;
             });
-            const filename = `${bookId}_page${pageIndex}_complete.webp`;
+            // 文件名格式：{bookid}_page{pageIndex}.webp
+            const filename = `${bookId}_page${pageIndex}.webp`;
             canvas.toBlob(
                 function (blob) {
                     const link = document.createElement("a");
@@ -324,7 +360,7 @@
                         showNotice(`✓ 第${pageIndex}页已保存为 ${filename}`);
                         updateStatusDisplay(`合并完成，继续处理...`);
                         updateMergedProgress();
-                        console.log("查找下一个未完成页面...");
+                        console.log("查找下一个未合并页面...");
                         findAndJumpToNextPage();
                     }, 100);
                 },
@@ -337,7 +373,7 @@
         }
     }
 
-    // 查找并跳转到下一个未完成（未合并）的最小页面
+    // 查找并跳转到下一个未合并页面
     function findAndJumpToNextPage() {
         if (!isRunning) return;
         console.log("查找下一个未合并页面...");
@@ -482,9 +518,13 @@
         if (cancelButton) {
             cancelButton.style.display = "none";
         }
+        if (reloadInterval) {
+            clearInterval(reloadInterval);
+            reloadInterval = null;
+        }
     }
 
-    // 添加增强的交互界面，新增合并进度显示
+    // 添加增强的交互界面（包括进度显示、按钮、以及自动点击重载按钮）
     function addEnhancedUI() {
         if (panelCreated) return;
         const style = document.createElement("style");
@@ -553,7 +593,8 @@
                 margin: 0 1px;
                 transition: all 0.3s ease;
             }
-            .progress-item.loaded { background: #4CAF50; }
+            .progress-item.loaded-light { background: #a8d5a2; }
+            .progress-item.loaded-dark { background: #4CAF50; }
             #statusDisplay, #mergedProgressDisplay, #completionNotice { font-size: 13px; color: #555; min-height: 20px; }
             #mergedProgressDisplay { margin-top: 5px; }
             #completionNotice { color: #4CAF50; margin-top: 8px; font-weight: bold; opacity: 0; transition: opacity 0.5s ease; }
@@ -614,6 +655,10 @@
                     } else {
                         isRunning = true;
                         initScript(true);
+                    }
+                    // 启动自动点击重载按钮的检测，每秒执行一次
+                    if (!reloadInterval) {
+                        reloadInterval = setInterval(checkReloadButton, 1000);
                     }
                 }
             });
