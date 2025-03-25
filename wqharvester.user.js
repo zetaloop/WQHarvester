@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WQHarvester 文泉收割机
 // @namespace    http://tampermonkey.net/
-// @version      1.2
+// @version      1.3
 // @description  下载文泉书局已购电子书，自动合并阅读器中的书页切片并下载为完整页面图片，需结合仓库里的另一个 Python 脚本使用。
 // @author       zetaloop
 // @homepage     https://github.com/zetaloop/WQHarvester
@@ -64,6 +64,9 @@
 
     // 自动点击“重新加载本页”按钮的定时器
     let reloadInterval = null;
+
+    // 全局合并用的画布，复用以提升效率
+    let mergeCanvas = null;
 
     // 提取书籍ID
     function getBookId() {
@@ -320,7 +323,7 @@
         }
     }
 
-    // 合并切片并保存为完整页面（保存文件名不带 _complete）
+    // 合并切片并保存为完整页面（保存文件名不带 _complete）——优化点：复用全局画布，优先使用 OffscreenCanvas
     function mergeAndSavePage(bookId, pageIndex) {
         if (
             !pageSlices[pageIndex] ||
@@ -341,10 +344,17 @@
                 totalWidth += entry.img.naturalWidth;
                 maxHeight = Math.max(maxHeight, entry.img.naturalHeight);
             });
-            const canvas = document.createElement("canvas");
-            canvas.width = totalWidth;
-            canvas.height = maxHeight;
-            const ctx = canvas.getContext("2d");
+            // 初始化或复用全局画布
+            if (!mergeCanvas) {
+                if (typeof OffscreenCanvas !== "undefined") {
+                    mergeCanvas = new OffscreenCanvas(totalWidth, maxHeight);
+                } else {
+                    mergeCanvas = document.createElement("canvas");
+                }
+            }
+            mergeCanvas.width = totalWidth;
+            mergeCanvas.height = maxHeight;
+            const ctx = mergeCanvas.getContext("2d");
             let currentX = 0;
             sortedSlices.forEach(([left, entry]) => {
                 ctx.drawImage(entry.img, currentX, 0);
@@ -352,34 +362,50 @@
             });
             // 文件名格式：{bookid}_page{pageIndex}.webp
             const filename = `${bookId}_page${pageIndex}.webp`;
-            canvas.toBlob(
-                function (blob) {
-                    const link = document.createElement("a");
-                    link.href = URL.createObjectURL(blob);
-                    link.download = filename;
-                    link.style.display = "none";
-                    document.body.appendChild(link);
-                    link.click();
-                    setTimeout(() => {
-                        URL.revokeObjectURL(link.href);
-                        document.body.removeChild(link);
-                        console.log(`已保存合并页面：${filename}`);
-                        completedPages.add(pageIndex);
-                        processingPages.delete(pageIndex);
-                        showNotice(`✓ 第${pageIndex}页已保存为 ${filename}`);
-                        updateStatusDisplay(`合并完成，继续处理...`);
-                        updateMergedProgress();
-                        console.log("查找下一个未合并页面...");
-                        findAndJumpToNextPage();
-                    }, 100);
-                },
-                "image/webp",
-                0.95
-            );
+            // 如果使用 OffscreenCanvas 优先使用 convertToBlob
+            if (
+                mergeCanvas instanceof OffscreenCanvas &&
+                mergeCanvas.convertToBlob
+            ) {
+                mergeCanvas
+                    .convertToBlob({ type: "image/webp", quality: 0.95 })
+                    .then((blob) => {
+                        saveBlob(blob, filename, pageIndex);
+                    });
+            } else {
+                mergeCanvas.toBlob(
+                    function (blob) {
+                        saveBlob(blob, filename, pageIndex);
+                    },
+                    "image/webp",
+                    0.95
+                );
+            }
         } catch (error) {
             console.error(`合并第${pageIndex}页失败：`, error);
             updateStatusDisplay(`合并第${pageIndex}页时出错：${error.message}`);
         }
+    }
+    // 将生成的 Blob 保存为下载文件
+    function saveBlob(blob, filename, pageIndex) {
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = filename;
+        link.style.display = "none";
+        document.body.appendChild(link);
+        link.click();
+        setTimeout(() => {
+            URL.revokeObjectURL(link.href);
+            document.body.removeChild(link);
+            console.log(`已保存合并页面：${filename}`);
+            completedPages.add(pageIndex);
+            processingPages.delete(pageIndex);
+            showNotice(`✓ 第${pageIndex}页已保存为 ${filename}`);
+            updateStatusDisplay(`合并完成，继续处理...`);
+            updateMergedProgress();
+            console.log("查找下一个未合并页面...");
+            findAndJumpToNextPage();
+        }, 100);
     }
 
     // 查找并跳转到下一个未合并页面
