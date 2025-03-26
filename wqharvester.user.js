@@ -169,7 +169,7 @@
     }
 
     // 显示临时通知消息
-    function showNotice(message, duration = 3000) {
+    function showNotice(message, duration = 500) {
         if (!completionNotice) return;
         if (noticeTimer) clearTimeout(noticeTimer);
         completionNotice.textContent = message;
@@ -531,7 +531,7 @@
             jumpToPage(nextPage);
         } else {
             updateStatusDisplay(`所有页面处理完成！`);
-            showNotice(`✓ 所有页面处理完成！`, 0);
+            showNotice(`✓ 所有页面处理完成！`, 2000);
             const cancelButton = document.getElementById("cancelButton");
             const startButton = document.getElementById("startButton");
             if (cancelButton) cancelButton.style.display = "none";
@@ -636,7 +636,7 @@
             observer = null;
         }
         updateStatusDisplay("已停止处理");
-        showNotice("已取消处理", 3000);
+        showNotice("已取消处理", 1000);
         const startButton = document.getElementById("startButton");
         const cancelButton = document.getElementById("cancelButton");
         if (startButton) {
@@ -781,7 +781,7 @@
             // 等待100ms后保存目录
             setTimeout(() => {
                 saveTOC();
-                showNotice("✓ 目录已保存", 3000);
+                showNotice("✓ 目录已保存");
                 // 再等待100ms后继续原有流程
                 setTimeout(() => {
                     if (!isInitialized || !isRunning) {
