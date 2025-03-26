@@ -5,8 +5,8 @@
 // @description  下载文泉书局已购电子书，自动合并阅读器中的书页切片并下载为完整页面图片，需结合仓库里的另一个 Python 脚本使用。
 // @author       zetaloop
 // @homepage     https://github.com/zetaloop/WQHarvester
-// @match        https://wqbook.wqxuetang.com/deep/read/*
-// @match        *://wqbook.wqxuetang.com/deep/read/*
+// @match        https://wqbook.wqxuetang.com/deep/read/pdf*
+// @match        *://wqbook.wqxuetang.com/deep/read/pdf*
 // @grant        none
 // ==/UserScript==
 
