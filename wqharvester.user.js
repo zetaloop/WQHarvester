@@ -392,6 +392,23 @@
     }
     // 将生成的 Blob 保存为下载文件
     function saveBlob(blob, filename, pageIndex) {
+        if (!saveBlob.savedFiles) {
+            saveBlob.savedFiles = new Set();
+        }
+        if (saveBlob.savedFiles.has(filename)) {
+            console.log(`文件 ${filename} 已经保存，跳过重复保存`);
+            setTimeout(() => {
+                completedPages.add(pageIndex);
+                processingPages.delete(pageIndex);
+                showNotice(`✓ 第${pageIndex}页已保存为 ${filename}`);
+                updateStatusDisplay(`合并完成，继续处理...`);
+                updateMergedProgress();
+                console.log("查找下一个未合并页面...");
+                findAndJumpToNextPage();
+            }, 100);
+            return;
+        }
+        saveBlob.savedFiles.add(filename);
         const link = document.createElement("a");
         link.href = URL.createObjectURL(blob);
         link.download = filename;
