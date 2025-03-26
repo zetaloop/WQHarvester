@@ -8,6 +8,7 @@
 // @match        https://wqbook.wqxuetang.com/deep/read/pdf*
 // @match        *://wqbook.wqxuetang.com/deep/read/pdf*
 // @grant        none
+// @license      The Unlicense
 // ==/UserScript==
 
 (function () {
