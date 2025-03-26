@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WQHarvester 文泉收割机
 // @namespace    http://tampermonkey.net/
-// @version      1.4
+// @version      1.5
 // @description  下载文泉书局已购电子书，自动合并阅读器中的书页切片并下载为完整页面图片，需结合仓库里的另一个 Python 脚本使用。
 // @author       zetaloop
 // @homepage     https://github.com/zetaloop/WQHarvester
@@ -257,8 +257,11 @@
     // 更新合并进度显示（显示已合并页数 / 总页数）
     function updateMergedProgress() {
         if (!mergedProgressDisplay) return;
+        // 将 completedPages 中的所有索引统一转为字符串去重
+        const mergedIndexes = new Set();
+        completedPages.forEach((index) => mergedIndexes.add(String(index)));
         const totalPages = document.querySelectorAll(".page-img-box").length;
-        mergedProgressDisplay.textContent = `合并进度：已合并 ${completedPages.size} / ${totalPages} 页`;
+        mergedProgressDisplay.textContent = `合并进度：已合并 ${mergedIndexes.size} / ${totalPages} 页`;
     }
 
     // 获取当前视口中最“可见”的页面索引
@@ -778,7 +781,7 @@
             // 等待100ms后保存目录
             setTimeout(() => {
                 saveTOC();
-                updateStatusDisplay("目录已保存");
+                showNotice("✓ 目录已保存", 3000);
                 // 再等待100ms后继续原有流程
                 setTimeout(() => {
                     if (!isInitialized || !isRunning) {
