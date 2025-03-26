@@ -74,6 +74,77 @@
         return urlParams.get("bid") || "unknown";
     }
 
+    // 新增：保存目录信息为 JSON 文件（{bookid}_toc.json）
+    // JSON 结构：数组，每个节点包含 name（目录名称）、page（对应页码）和 children（子节点数组）
+    function saveTOC() {
+        // 查找目录容器（目录区域一般带有 class "catalogue left-scroll"）
+        const tocContainer = document.querySelector(".catalogue.left-scroll");
+        if (!tocContainer) {
+            console.log("未找到目录容器，跳过保存目录。");
+            return;
+        }
+        // 在目录容器中查找目录树（一般带有 class "el-tree book-tree"）
+        const treeRoot = tocContainer.querySelector(".el-tree.book-tree");
+        if (!treeRoot) {
+            console.log("未找到目录树，跳过保存目录。");
+            return;
+        }
+        // 递归解析目录树
+        function parseTreeItems(container) {
+            let items = [];
+            const treeItems = container.querySelectorAll(
+                ':scope > [role="treeitem"]'
+            );
+            treeItems.forEach((item) => {
+                let obj = {};
+                const node = item.querySelector(".tree-node");
+                if (node) {
+                    const leftSpan = node.querySelector(".node-left");
+                    const rightSpan = node.querySelector(".node-right");
+                    if (leftSpan) {
+                        obj.name = leftSpan.textContent.trim();
+                    }
+                    if (rightSpan) {
+                        const pageSpan = rightSpan.querySelector("span");
+                        if (pageSpan) {
+                            obj.page = pageSpan.textContent.trim();
+                        } else {
+                            obj.page = null;
+                        }
+                    } else {
+                        obj.page = null;
+                    }
+                }
+                const childrenGroup = item.querySelector(
+                    ':scope > [role="group"]'
+                );
+                if (childrenGroup) {
+                    obj.children = parseTreeItems(childrenGroup);
+                } else {
+                    obj.children = [];
+                }
+                items.push(obj);
+            });
+            return items;
+        }
+        const toc = parseTreeItems(treeRoot);
+        const tocJson = JSON.stringify(toc, null, 2);
+        const bookid = getBookId();
+        const filename = `${bookid}_toc.json`;
+        const blob = new Blob([tocJson], { type: "application/json" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        a.style.display = "none";
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+            URL.revokeObjectURL(a.href);
+            document.body.removeChild(a);
+        }, 100);
+        console.log(`目录已保存为 ${filename}`);
+    }
+
     // 自动检测并点击“重新加载本页”按钮（每秒检测一次）
     function checkReloadButton() {
         const reloadButtons = document.querySelectorAll(".reload_image");
@@ -697,6 +768,9 @@
         document
             .getElementById("startButton")
             .addEventListener("click", function () {
+                // 新增：点击开始时，先保存目录为 JSON 文件
+                saveTOC();
+
                 if (!isInitialized || !isRunning) {
                     this.disabled = true;
                     this.textContent = "处理中...";
