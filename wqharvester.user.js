@@ -828,27 +828,36 @@
             pendingPages.clear();
             processingPages.clear();
             activePage = null;
-            const userStartPage = prompt(
-                "请输入要开始处理的页码 (取消则使用当前页)："
-            );
-            if (userStartPage && !isNaN(parseInt(userStartPage))) {
-                startPage = parseInt(userStartPage);
-                currentMinPage = startPage;
-                jumpToPage(currentMinPage);
-            } else {
-                const currentPage = getCurrentVisiblePage();
-                if (currentPage !== null) {
-                    startPage = currentPage;
-                    currentMinPage = startPage;
-                } else {
-                    const firstPage = document.querySelector(".page-img-box");
-                    if (firstPage) {
-                        startPage = parseInt(firstPage.getAttribute("index"));
-                        currentMinPage = startPage;
-                    }
+            const userStartPage = prompt("请输入要开始处理的页码：");
+            // 如果用户取消或未输入页码，则取消操作并恢复开始按钮状态
+            if (!userStartPage) {
+                stopProcessing();
+                const startButton = document.getElementById("startButton");
+                if (startButton) {
+                    startButton.disabled = false;
+                    startButton.textContent = "开始处理";
+                    startButton.style.backgroundColor = "#4CAF50";
+                    startButton.style.display = "block";
                 }
-                jumpToPage(currentMinPage);
+                updateStatusDisplay("操作已取消");
+                return;
             }
+            // 如果输入的内容不是有效数字，则同样取消操作
+            if (isNaN(parseInt(userStartPage))) {
+                stopProcessing();
+                const startButton = document.getElementById("startButton");
+                if (startButton) {
+                    startButton.disabled = false;
+                    startButton.textContent = "开始处理";
+                    startButton.style.backgroundColor = "#4CAF50";
+                    startButton.style.display = "block";
+                }
+                updateStatusDisplay("无效的页码，操作已取消");
+                return;
+            }
+            startPage = parseInt(userStartPage);
+            currentMinPage = startPage;
+            jumpToPage(currentMinPage);
             console.log(`开始处理，起始页为：${startPage}`);
             updateStatusDisplay(`开始处理，起始页：第${startPage}页`);
         } else {
