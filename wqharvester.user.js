@@ -765,33 +765,48 @@
         );
         completionNotice = document.getElementById("completionNotice");
 
-        document
-            .getElementById("startButton")
-            .addEventListener("click", function () {
-                // 新增：点击开始时，先保存目录为 JSON 文件
+        const startButton = document.getElementById("startButton");
+        startButton.addEventListener("click", function () {
+            // 首先尝试点击目录区域的 <small> 标签展开全部目录
+            const expandSmall = document.querySelector(
+                ".catalogue.left-scroll small"
+            );
+            if (expandSmall) {
+                expandSmall.click();
+                console.log("点击展开全部目录");
+            }
+            // 等待100ms后保存目录
+            setTimeout(() => {
                 saveTOC();
-
-                if (!isInitialized || !isRunning) {
-                    this.disabled = true;
-                    this.textContent = "处理中...";
-                    this.style.backgroundColor = "#888";
-                    this.style.display = "none";
-                    const cancelButton =
-                        document.getElementById("cancelButton");
-                    if (cancelButton) cancelButton.style.display = "block";
-                    if (isInitialized) {
-                        isRunning = true;
-                        initScript(false);
-                    } else {
-                        isRunning = true;
-                        initScript(true);
+                updateStatusDisplay("目录已保存");
+                // 再等待100ms后继续原有流程
+                setTimeout(() => {
+                    if (!isInitialized || !isRunning) {
+                        startButton.disabled = true;
+                        startButton.textContent = "处理中...";
+                        startButton.style.backgroundColor = "#888";
+                        startButton.style.display = "none";
+                        const cancelButton =
+                            document.getElementById("cancelButton");
+                        if (cancelButton) cancelButton.style.display = "block";
+                        if (isInitialized) {
+                            isRunning = true;
+                            initScript(false);
+                        } else {
+                            isRunning = true;
+                            initScript(true);
+                        }
+                        // 启动自动点击重载按钮的检测，每秒执行一次
+                        if (!reloadInterval) {
+                            reloadInterval = setInterval(
+                                checkReloadButton,
+                                1000
+                            );
+                        }
                     }
-                    // 启动自动点击重载按钮的检测，每秒执行一次
-                    if (!reloadInterval) {
-                        reloadInterval = setInterval(checkReloadButton, 1000);
-                    }
-                }
-            });
+                }, 100);
+            }, 100);
+        });
 
         document
             .getElementById("cancelButton")
